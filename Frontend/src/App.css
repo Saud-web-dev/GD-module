@@ -1,0 +1,22 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;600;700;800&display=swap');
+
+:root { --ink: #17251f; --muted: #718078; --line: #d9e2dc; --mint: #d9f99d; --teal: #0f766e; --paper: #f5f7f1; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: Manrope, sans-serif; }
+.app-shell { min-height: 100vh; padding: clamp(28px, 6vw, 84px) clamp(20px, 7vw, 110px); background: radial-gradient(circle at 90% 4%, #dff3cf 0, transparent 28%), linear-gradient(135deg, #f5f7f1 0%, #e9f0e7 100%); }
+.hero-panel { max-width: 1040px; margin: 0 auto 64px; }
+.eyebrow, .section-index, .connection-label, label span { color: var(--teal); font: 500 11px 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; }
+.hero-heading { display: flex; align-items: flex-start; gap: 22px; margin-top: 20px; }
+h1 { max-width: 760px; margin: 0; font-size: clamp(42px, 7vw, 92px); line-height: .98; letter-spacing: -0.04em; font-weight: 800; }
+.hero-copy { max-width: 470px; margin: 28px 0 0 8px; color: var(--muted); line-height: 1.7; }
+.status-dot { width: 12px; height: 12px; flex: 0 0 auto; margin-top: 12px; border-radius: 50%; background: #e2a72e; box-shadow: 0 0 0 6px #e2a72e22; }.status-dot.connected { background: #2f9b63; box-shadow: 0 0 0 6px #2f9b6322; }.status-dot.offline { background: #bd4b4b; box-shadow: 0 0 0 6px #bd4b4b22; }
+.workspace-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(280px, .9fr); gap: 1px; max-width: 1040px; margin: 0 auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.export-form, .result-panel { padding: 34px 0; }.export-form { padding-right: clamp(20px, 5vw, 72px); border-right: 1px solid var(--line); }.result-panel { padding-left: clamp(20px, 5vw, 72px); }
+.section-heading { display: flex; justify-content: space-between; align-items: start; gap: 20px; margin-bottom: 38px; }.section-heading > div { display: flex; gap: 18px; align-items: baseline; }h2 { margin: 0; font-size: 21px; }.connection-label { color: var(--muted); font-size: 10px; }
+label { display: grid; gap: 10px; margin-bottom: 25px; font-size: 13px; font-weight: 700; }label span { font-size: 10px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+input { width: 100%; padding: 15px 0; border: 0; border-bottom: 1px solid var(--line); outline: 0; background: transparent; color: var(--ink); font: 500 16px 'DM Mono', monospace; }input:focus { border-color: var(--teal); }
+button { display: flex; justify-content: space-between; align-items: center; width: 100%; margin-top: 42px; padding: 17px 20px; border: 0; background: var(--ink); color: white; cursor: pointer; font: 700 13px Manrope; }button:hover { background: var(--teal); }button:disabled { cursor: not-allowed; opacity: .45; }
+.auth-button { display: flex; justify-content: center; gap: 12px; margin-top: 0; margin-bottom: 30px; background: #4285f4; }
+.auth-button:hover { background: #357ae8; }
+.empty-state { max-width: 260px; margin-top: 80px; color: var(--muted); font-size: 14px; line-height: 1.7; }.success-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: var(--mint); color: var(--teal); font-size: 22px; }.result-title { margin: 24px 0 4px; font-size: 20px; font-weight: 800; }.file-name { margin: 0 0 28px; color: var(--muted); font: 12px 'DM Mono', monospace; overflow-wrap: anywhere; }.model-list { border-top: 1px solid var(--line); }.model-row { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13px; }.model-row strong { color: var(--teal); font: 500 12px 'DM Mono', monospace; }.result-panel a { display: inline-block; margin-top: 26px; color: var(--teal); font-size: 13px; font-weight: 700; }.message { margin-top: 18px; font-size: 13px; }.error { color: #a43f3f; }
+@media (max-width: 720px) { .hero-panel { margin-bottom: 42px; }.workspace-grid { display: block; }.export-form { padding-right: 0; border-right: 0; border-bottom: 1px solid var(--line); }.result-panel { padding-left: 0; }.empty-state { margin-top: 30px; } }
