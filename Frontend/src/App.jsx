@@ -107,13 +107,25 @@ function App() {
                   <p style={{fontSize: '0.9em', color: '#999'}}>No collections found</p>
                 )}
               </div>
-              <a 
-                href={`${API_URL}/download/${result.fileName}`} 
-                download
-                style={{display: 'inline-block', marginTop: '15px', padding: '10px 20px', backgroundColor: '#4caf50', color: 'white', textDecoration: 'none', borderRadius: '4px', cursor: 'pointer'}}
-              >
-                📥 Download File
-              </a>
+              <div style={{ display: 'flex', gap: '10px', marginTop: '15px', flexWrap: 'wrap' }}>
+                <a 
+                  href={`${API_URL}/download/${result.fileName}`} 
+                  download
+                  style={{display: 'inline-block', padding: '10px 16px', backgroundColor: '#4caf50', color: 'white', textDecoration: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold'}}
+                >
+                  📥 Download File
+                </a>
+                {result.driveFile?.webViewLink && (
+                  <a 
+                    href={result.driveFile.webViewLink} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    style={{display: 'inline-block', padding: '10px 16px', backgroundColor: '#4285F4', color: 'white', textDecoration: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold'}}
+                  >
+                    🌐 View in Google Drive
+                  </a>
+                )}
+              </div>
             </>
           ) : <p className="empty-state">Your export summary will appear here after the first successful upload.</p>}
         </aside>

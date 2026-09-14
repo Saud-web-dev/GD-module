@@ -1,8 +1,7 @@
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { google } from 'googleapis'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 
 const EXPORTS_DIR = './exports'
 
@@ -12,49 +11,88 @@ if (!existsSync(EXPORTS_DIR)) {
 }
 
 /**
- * Get authenticated Google Drive client using Service Account
- * NO OAUTH REQUIRED - Works automatically!
+ * Get authenticated Google Drive client
+ * 1. Checks for OAuth 2.0 tokens (google-tokens.json) -> Works with Personal Google Drive (15 GB free quota)
+ * 2. Fallback to Service Account (service-account.json) -> For Google Workspace / Shared Drives
  */
 async function getDriveClient() {
+  const tokensPath = process.env.GOOGLE_TOKENS_PATH || join(process.cwd(), 'google-tokens.json')
+
+  // 1. Try OAuth 2.0 first if tokens exist
+  if (
+    process.env.GOOGLE_OAUTH_CLIENT_ID &&
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET &&
+    existsSync(tokensPath)
+  ) {
+    try {
+      console.log('🔐 Authenticating with Google OAuth 2.0 (User Account)...')
+      const tokens = JSON.parse(readFileSync(tokensPath, 'utf-8'))
+
+      const oauth2Client = new google.auth.OAuth2(
+        process.env.GOOGLE_OAUTH_CLIENT_ID,
+        process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+        process.env.GOOGLE_OAUTH_REDIRECT_URI || 'http://localhost:5000/auth/google/callback'
+      )
+
+      oauth2Client.setCredentials(tokens)
+
+      // Auto-save refreshed tokens when Google issues new tokens
+      oauth2Client.on('tokens', (newTokens) => {
+        try {
+          const currentTokens = existsSync(tokensPath)
+            ? JSON.parse(readFileSync(tokensPath, 'utf-8'))
+            : {}
+          const mergedTokens = { ...currentTokens, ...newTokens }
+          writeFileSync(tokensPath, JSON.stringify(mergedTokens, null, 2))
+          console.log('🔄 Google OAuth tokens refreshed and saved.')
+        } catch (saveErr) {
+          console.warn('⚠️ Could not auto-save refreshed tokens:', saveErr.message)
+        }
+      })
+
+      const drive = google.drive({ version: 'v3', auth: oauth2Client })
+      return { drive, authType: 'oauth' }
+    } catch (oauthError) {
+      console.warn('⚠️ OAuth authentication failed, trying Service Account fallback:', oauthError.message)
+    }
+  }
+
+  // 2. Service Account Auth (fallback)
   let serviceAccount
-  
-  // Try reading from file first (recommended)
+
   const serviceAccountPath = join(process.cwd(), 'config', 'service-account.json')
-  
+
   if (existsSync(serviceAccountPath)) {
     console.log('📂 Loading Service Account from config file...')
     const fileContent = readFileSync(serviceAccountPath, 'utf-8')
     serviceAccount = JSON.parse(fileContent)
-  } else {
-    // Fallback to .env variable
+  } else if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
     console.log('📂 Loading Service Account from .env...')
     try {
       serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON)
     } catch (error) {
       throw new Error(
-        'Service Account not found! Create config/service-account.json or set GOOGLE_SERVICE_ACCOUNT_JSON in .env'
+        'Service Account JSON parse error in .env'
       )
     }
+  } else {
+    throw new Error(
+      'Authentication failed! No valid Google OAuth tokens (google-tokens.json) or Service Account found.'
+    )
   }
 
-  // Create JWT auth client
   const auth = new google.auth.GoogleAuth({
     credentials: serviceAccount,
     scopes: ['https://www.googleapis.com/auth/drive.file'],
   })
 
-  // Get authenticated client
   const client = await auth.getClient()
-  
-  // Create Drive API client
   const drive = google.drive({ version: 'v3', auth: client })
-  
-  return drive
+  return { drive, authType: 'service_account' }
 }
 
 /**
- * Upload Excel file to Google Drive using Service Account
- * NO manual OAuth required - automatic upload!
+ * Upload Excel file to Google Drive
  */
 export async function uploadExcelToGoogleDrive({ buffer, fileName, contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', folderId } = {}) {
   if (!Buffer.isBuffer(buffer)) {
@@ -72,7 +110,7 @@ export async function uploadExcelToGoogleDrive({ buffer, fileName, contentType =
   // Step 1: Save locally first (always backup locally)
   const localPath = join(EXPORTS_DIR, fileName)
   const writeStream = createWriteStream(localPath)
-  
+
   await new Promise((resolve, reject) => {
     writeStream.on('finish', resolve)
     writeStream.on('error', reject)
@@ -82,27 +120,30 @@ export async function uploadExcelToGoogleDrive({ buffer, fileName, contentType =
 
   console.log(`📁 File saved locally: ${localPath}`)
 
-  // Step 2: Upload to Google Drive using Service Account
+  // Step 2: Upload to Google Drive
   try {
-    console.log('🔐 Authenticating with Service Account...')
-    const drive = await getDriveClient()
+    const { drive, authType } = await getDriveClient()
+    const targetFolderId = folderId || process.env.GOOGLE_DRIVE_FOLDER_ID
 
-    console.log(`📤 Uploading to Google Drive: ${fileName}`)
-    
+    console.log(`📤 Uploading to Google Drive (${authType}): ${fileName}`)
+
     // Create readable stream from buffer
     const bufferStream = Readable.from(buffer)
 
+    const requestBody = {
+      name: fileName,
+      ...(targetFolderId ? { parents: [targetFolderId] } : {}),
+    }
+
     // Upload file
     const response = await drive.files.create({
-      requestBody: {
-        name: fileName,
-        parents: [folderId || process.env.GOOGLE_DRIVE_FOLDER_ID],
-      },
+      requestBody,
       media: {
         mimeType: contentType,
         body: bufferStream,
       },
       fields: 'id, name, webViewLink, size',
+      supportsAllDrives: true,
     })
 
     const file = response.data
@@ -126,20 +167,13 @@ export async function uploadExcelToGoogleDrive({ buffer, fileName, contentType =
     if (error.message && error.message.includes('storage quota')) {
       console.error('❌ Service Account has no storage quota!')
       console.error('')
-      console.error('🔧 SOLUTION:')
-      console.error('   1. Go to your Google Drive')
-      console.error('   2. Right-click on the folder you want to use')
-      console.error('   3. Click "Share"')
-      console.error('   4. Add this email: gd-uploader@gd-uploader-saud.iam.gserviceaccount.com')
-      console.error('   5. Give "Editor" permission')
-      console.error('   6. Click Send')
-      console.error('')
-      console.error('   OR use a Shared Drive (Team Drive)')
+      console.error('ℹ️ Google Service Accounts have 0 MB storage quota on personal Google Drive (@gmail.com).')
+      console.error('   Please use OAuth 2.0 authentication (google-tokens.json) or a Google Workspace Shared Drive.')
       console.error('')
     } else {
       console.error('❌ Google Drive upload failed:', error.message)
     }
-    
+
     // Return local file info even if Drive upload fails
     return {
       id: 'local-only',
@@ -160,13 +194,16 @@ export async function uploadExcelToGoogleDrive({ buffer, fileName, contentType =
  */
 export async function listDriveFiles(folderId, maxResults = 100) {
   try {
-    const drive = await getDriveClient()
-    
+    const { drive } = await getDriveClient()
+    const targetFolderId = folderId || process.env.GOOGLE_DRIVE_FOLDER_ID
+
     const response = await drive.files.list({
-      q: `'${folderId || process.env.GOOGLE_DRIVE_FOLDER_ID}' in parents`,
+      q: targetFolderId ? `'${targetFolderId}' in parents` : undefined,
       pageSize: maxResults,
       fields: 'files(id, name, createdTime, size, webViewLink)',
       orderBy: 'createdTime desc',
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
     })
 
     return response.data.files
@@ -181,23 +218,23 @@ export async function listDriveFiles(folderId, maxResults = 100) {
  */
 export async function deleteOldBackups(folderId, daysOld = 30) {
   try {
-    const drive = await getDriveClient()
+    const { drive } = await getDriveClient()
     const files = await listDriveFiles(folderId)
-    
+
     const cutoffDate = new Date()
     cutoffDate.setDate(cutoffDate.getDate() - daysOld)
-    
+
     let deletedCount = 0
-    
+
     for (const file of files) {
       const createdDate = new Date(file.createdTime)
       if (createdDate < cutoffDate) {
-        await drive.files.delete({ fileId: file.id })
+        await drive.files.delete({ fileId: file.id, supportsAllDrives: true })
         console.log(`🗑️ Deleted old backup: ${file.name}`)
         deletedCount++
       }
     }
-    
+
     console.log(`✅ Deleted ${deletedCount} old backup(s)`)
     return deletedCount
   } catch (error) {
@@ -205,3 +242,4 @@ export async function deleteOldBackups(folderId, daysOld = 30) {
     return 0
   }
 }
+

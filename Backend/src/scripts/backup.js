@@ -1,3 +1,4 @@
+import '../config/environment.js'
 import { connectDatabase, disconnectDatabase } from '../config/database.js'
 import { createAndUploadCompleteBackup } from '../services/backupService.js'
 
