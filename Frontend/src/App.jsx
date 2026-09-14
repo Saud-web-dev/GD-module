@@ -18,37 +18,31 @@ function App() {
       .catch(() => setHealth('offline'))
   }, [])
 
-  function handleGoogleAuth() {
-    window.location.href = `${API_URL}/auth/google`
-  }
-
-  async function handleExport(event) {
+  function handleExport(event) {
     event.preventDefault()
     setIsExporting(true)
     setError('')
     setResult(null)
 
-    try {
-      const response = await fetch(`${API_URL}/api/exports`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workbookName, folderId: folderId || undefined }),
-      })
-      const data = await response.json()
-      if (!response.ok) {
-        if (response.status === 401) {
-          setError('Please authenticate with Google first by clicking "Login with Google"')
+    fetch(`${API_URL}/api/exports`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workbookName, folderId: folderId || undefined }),
+    })
+      .then((response) => response.json())
+      .then((data) => {
+        if (data.message?.toLowerCase().includes('error') || data.message?.toLowerCase().includes('failed')) {
+          setError(data.message || 'Export failed')
         } else {
-          throw new Error(data.message || 'Export failed')
+          setResult(data)
+          setError('')
         }
-      } else {
-        setResult(data)
-      }
-    } catch (requestError) {
-      setError(requestError.message)
-    } finally {
-      setIsExporting(false)
-    }
+        setIsExporting(false)
+      })
+      .catch((requestError) => {
+        setError(requestError.message)
+        setIsExporting(false)
+      })
   }
 
   return (
@@ -69,20 +63,16 @@ function App() {
             <span className="connection-label">Backend: {health}</span>
           </div>
 
-          <button type="button" onClick={handleGoogleAuth} className="auth-button">
-            🔐 Login with Google
-          </button>
-
           <label>
             Workbook name
             <input value={workbookName} onChange={(event) => setWorkbookName(event.target.value)} required />
           </label>
           <label>
-            Drive folder ID <span>(optional)</span>
-            <input value={folderId} onChange={(event) => setFolderId(event.target.value)} placeholder="Use configured default" />
+            Drive folder ID <span>(optional - uses .env default)</span>
+            <input value={folderId} onChange={(event) => setFolderId(event.target.value)} placeholder="Leave empty for default" />
           </label>
           <button type="submit" disabled={isExporting || health === 'offline'}>
-            {isExporting ? 'Building workbook...' : 'Extract & upload'} <span>↗</span>
+            {isExporting ? 'Extracting & uploading...' : 'Extract & upload to Google Drive'} <span>↗</span>
           </button>
           {error && <p className="message error">{error}</p>}
         </form>
@@ -92,7 +82,7 @@ function App() {
           {result ? (
             <>
               <div className="success-mark">✓</div>
-              <p className="result-title">Upload complete</p>
+              <p className="result-title">Export ready!</p>
               <p className="file-name">{result.fileName}</p>
               <div className="model-list">
                 <p style={{fontSize: '0.9em', color: '#666', marginBottom: '10px'}}>
@@ -117,7 +107,13 @@ function App() {
                   <p style={{fontSize: '0.9em', color: '#999'}}>No collections found</p>
                 )}
               </div>
-              {result.driveFile?.webViewLink && <a href={result.driveFile.webViewLink} target="_blank" rel="noreferrer">Open in Google Drive ↗</a>}
+              <a 
+                href={`${API_URL}/download/${result.fileName}`} 
+                download
+                style={{display: 'inline-block', marginTop: '15px', padding: '10px 20px', backgroundColor: '#4caf50', color: 'white', textDecoration: 'none', borderRadius: '4px', cursor: 'pointer'}}
+              >
+                📥 Download File
+              </a>
             </>
           ) : <p className="empty-state">Your export summary will appear here after the first successful upload.</p>}
         </aside>

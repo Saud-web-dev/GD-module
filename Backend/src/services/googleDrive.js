@@ -1,50 +1,75 @@
-import { createWriteStream, existsSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { google } from 'googleapis'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const EXPORTS_DIR = './exports'
 
 // Create exports directory if it doesn't exist
 if (!existsSync(EXPORTS_DIR)) {
-  import('node:fs').then(fs => fs.mkdirSync(EXPORTS_DIR, { recursive: true }))
+  mkdirSync(EXPORTS_DIR, { recursive: true })
 }
 
-function getServiceAccountAuth() {
-  try {
-    let credentials
-    
-    if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-      // Handle both string and object formats
-      const credentialsData = process.env.GOOGLE_SERVICE_ACCOUNT_JSON
-      credentials = typeof credentialsData === 'string' ? JSON.parse(credentialsData) : credentialsData
-    } else {
-      throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON not found in .env')
+/**
+ * Get authenticated Google Drive client using Service Account
+ * NO OAUTH REQUIRED - Works automatically!
+ */
+async function getDriveClient() {
+  let serviceAccount
+  
+  // Try reading from file first (recommended)
+  const serviceAccountPath = join(process.cwd(), 'config', 'service-account.json')
+  
+  if (existsSync(serviceAccountPath)) {
+    console.log('📂 Loading Service Account from config file...')
+    const fileContent = readFileSync(serviceAccountPath, 'utf-8')
+    serviceAccount = JSON.parse(fileContent)
+  } else {
+    // Fallback to .env variable
+    console.log('📂 Loading Service Account from .env...')
+    try {
+      serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON)
+    } catch (error) {
+      throw new Error(
+        'Service Account not found! Create config/service-account.json or set GOOGLE_SERVICE_ACCOUNT_JSON in .env'
+      )
     }
-
-    if (!credentials.client_email || !credentials.private_key) {
-      throw new Error('Missing client_email or private_key in credentials')
-    }
-
-    // Handle escaped newlines in private key
-    const privateKey = credentials.private_key.replace(/\\n/g, '\n')
-
-    return new google.auth.JWT({
-      email: credentials.client_email,
-      key: privateKey,
-      scopes: ['https://www.googleapis.com/auth/drive.file'],
-    })
-  } catch (error) {
-    console.error('❌ Auth error:', error.message)
-    throw error
   }
+
+  // Create JWT auth client
+  const auth = new google.auth.GoogleAuth({
+    credentials: serviceAccount,
+    scopes: ['https://www.googleapis.com/auth/drive.file'],
+  })
+
+  // Get authenticated client
+  const client = await auth.getClient()
+  
+  // Create Drive API client
+  const drive = google.drive({ version: 'v3', auth: client })
+  
+  return drive
 }
 
-export async function uploadExcelToGoogleDrive({ buffer, fileName, contentType, folderId } = {}) {
-  if (!Buffer.isBuffer(buffer)) throw new TypeError('buffer must be a Buffer')
-  if (!fileName) throw new Error('fileName is required')
+/**
+ * Upload Excel file to Google Drive using Service Account
+ * NO manual OAuth required - automatic upload!
+ */
+export async function uploadExcelToGoogleDrive({ buffer, fileName, contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', folderId } = {}) {
+  if (!Buffer.isBuffer(buffer)) {
+    throw new TypeError('buffer must be a Buffer')
+  }
+  if (!fileName) {
+    throw new Error('fileName is required')
+  }
 
-  // First, save locally
+  // Ensure fileName has .xlsx extension
+  if (!fileName.endsWith('.xlsx')) {
+    fileName = `${fileName}.xlsx`
+  }
+
+  // Step 1: Save locally first (always backup locally)
   const localPath = join(EXPORTS_DIR, fileName)
   const writeStream = createWriteStream(localPath)
   
@@ -57,38 +82,126 @@ export async function uploadExcelToGoogleDrive({ buffer, fileName, contentType, 
 
   console.log(`📁 File saved locally: ${localPath}`)
 
-  // Try to upload to Google Drive
+  // Step 2: Upload to Google Drive using Service Account
   try {
-    const auth = getServiceAccountAuth()
-    const drive = google.drive({ version: 'v3', auth })
+    console.log('🔐 Authenticating with Service Account...')
+    const drive = await getDriveClient()
 
+    console.log(`📤 Uploading to Google Drive: ${fileName}`)
+    
+    // Create readable stream from buffer
+    const bufferStream = Readable.from(buffer)
+
+    // Upload file
     const response = await drive.files.create({
       requestBody: {
         name: fileName,
-        mimeType: contentType || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        ...(folderId ? { parents: [folderId] } : {}),
+        parents: [folderId || process.env.GOOGLE_DRIVE_FOLDER_ID],
       },
       media: {
-        mimeType: contentType || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        body: Readable.from(buffer),
+        mimeType: contentType,
+        body: bufferStream,
       },
-      fields: 'id,name,webViewLink,size,createdTime',
+      fields: 'id, name, webViewLink, size',
     })
 
-    console.log(`☁️ File uploaded to Google Drive: ${fileName}`)
-    return response.data
-  } catch (driveError) {
-    console.warn(`⚠️  Google Drive upload failed, but file saved locally at: ${localPath}`)
-    console.warn(`Error: ${driveError.message}`)
-    
-    // Return local path instead
+    const file = response.data
+
+    console.log(`✅ Uploaded to Google Drive!`)
+    console.log(`   File ID: ${file.id}`)
+    console.log(`   View: ${file.webViewLink}`)
+
     return {
-      id: 'local',
+      id: file.id,
+      name: file.name,
+      webViewLink: file.webViewLink,
+      localPath: localPath,
+      downloadPath: `/download/${fileName}`,
+      status: 'uploaded',
+      message: 'File uploaded to Google Drive successfully!',
+      size: file.size || buffer.length,
+    }
+  } catch (error) {
+    // Check if it's a quota error
+    if (error.message && error.message.includes('storage quota')) {
+      console.error('❌ Service Account has no storage quota!')
+      console.error('')
+      console.error('🔧 SOLUTION:')
+      console.error('   1. Go to your Google Drive')
+      console.error('   2. Right-click on the folder you want to use')
+      console.error('   3. Click "Share"')
+      console.error('   4. Add this email: gd-uploader@gd-uploader-saud.iam.gserviceaccount.com')
+      console.error('   5. Give "Editor" permission')
+      console.error('   6. Click Send')
+      console.error('')
+      console.error('   OR use a Shared Drive (Team Drive)')
+      console.error('')
+    } else {
+      console.error('❌ Google Drive upload failed:', error.message)
+    }
+    
+    // Return local file info even if Drive upload fails
+    return {
+      id: 'local-only',
       name: fileName,
       webViewLink: null,
       localPath: localPath,
-      status: 'saved_locally',
-      message: `File saved locally. Manual upload needed: ${localPath}`,
+      downloadPath: `/download/${fileName}`,
+      status: 'local_only',
+      message: `Saved locally. Drive upload failed: ${error.message}`,
+      size: buffer.length,
+      error: error.message,
     }
+  }
+}
+
+/**
+ * List files in Google Drive folder
+ */
+export async function listDriveFiles(folderId, maxResults = 100) {
+  try {
+    const drive = await getDriveClient()
+    
+    const response = await drive.files.list({
+      q: `'${folderId || process.env.GOOGLE_DRIVE_FOLDER_ID}' in parents`,
+      pageSize: maxResults,
+      fields: 'files(id, name, createdTime, size, webViewLink)',
+      orderBy: 'createdTime desc',
+    })
+
+    return response.data.files
+  } catch (error) {
+    console.error('Failed to list files:', error.message)
+    return []
+  }
+}
+
+/**
+ * Delete old backup files (older than X days)
+ */
+export async function deleteOldBackups(folderId, daysOld = 30) {
+  try {
+    const drive = await getDriveClient()
+    const files = await listDriveFiles(folderId)
+    
+    const cutoffDate = new Date()
+    cutoffDate.setDate(cutoffDate.getDate() - daysOld)
+    
+    let deletedCount = 0
+    
+    for (const file of files) {
+      const createdDate = new Date(file.createdTime)
+      if (createdDate < cutoffDate) {
+        await drive.files.delete({ fileId: file.id })
+        console.log(`🗑️ Deleted old backup: ${file.name}`)
+        deletedCount++
+      }
+    }
+    
+    console.log(`✅ Deleted ${deletedCount} old backup(s)`)
+    return deletedCount
+  } catch (error) {
+    console.error('Failed to delete old backups:', error.message)
+    return 0
   }
 }
